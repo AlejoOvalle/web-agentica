@@ -1,257 +1,267 @@
 import streamlit as st
 import json
 import requests
-from urllib.parse import urljoin
+import io
+import zipfile
+from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
-# Configuración de la página
 st.set_page_config(
-    page_title="AI Agent & WebMCP Readiness Suite",
-    page_icon="🤖",
+    page_title="AI Agent Auto-Scanner & WebMCP Suite",
+    page_icon="⚡",
     layout="wide"
 )
 
-st.title("🤖 AI Agent & WebMCP Readiness Suite")
-st.markdown(
-    "Generador y validador de estándares recomendados para la navegación e integración de agentes de IA: "
-    "**llms.txt**, **ai-catalog.json** y esquemas **WebMCP**."
-)
-
-tabs = st.tabs(["🛠️ Generador de Archivos", "🔍 Validador de Sitio Web"])
-
 # ==========================================
-# TAB 1: GENERADOR
+# FUNCIONES DE EXTRACCIÓN Y RASTREO
 # ==========================================
-with tabs[0]:
-    st.header("Generador de Archivos y Metadatos")
-    tipo = st.selectbox(
-        "Selecciona el estándar que deseas generar:",
-        ["1. llms.txt", "2. ai-catalog.json", "3. Esquema WebMCP (JSON-LD)"]
-    )
 
-    # --------------------------------------
-    # 1. llms.txt
-    # --------------------------------------
-    if tipo == "1. llms.txt":
-        st.subheader("Generador de `llms.txt`")
-        st.info("Debe ubicarse en la raíz del dominio: `https://tusitio.com/llms.txt`")
-
-        col1, col2 = st.columns(2)
-        with col1:
-            site_name = st.text_input("Nombre del Proyecto/Sitio", "Mi Sitio Web")
-            summary = st.text_area(
-                "Resumen descriptivo (Contexto para el LLM)",
-                "Plataforma especializada en soluciones B2B y análisis de datos en tiempo real."
-            )
-        with col2:
-            st.markdown("**Enlaces Clave (Documentación / Secciones)**")
-            link_title1 = st.text_input("Título Sección 1", "Documentación API")
-            link_url1 = st.text_input("Ruta/URL 1", "/docs/api.md")
-            link_desc1 = st.text_input("Descripción 1", "Especificación de endpoints públicos.")
-            
-            link_title2 = st.text_input("Título Sección 2", "Catálogo de Productos")
-            link_url2 = st.text_input("Ruta/URL 2", "/productos.md")
-            link_desc2 = st.text_input("Descripción 2", "Lista completa de inventario disponible.")
-
-        llms_content = f"""# {site_name}
-> {summary}
-
-## Documentación Principal
-- [{link_title1}]({link_url1}): {link_desc1}
-- [{link_title2}]({link_url2}): {link_desc2}
-
-## Enlaces Opcionales
-- [Términos de Uso para IA](/terminos-ia.md): Reglas de rate-limiting y gobernanza de bots.
-"""
-        st.code(llms_content, language="markdown")
-        st.download_button(
-            label="Descargar llms.txt",
-            data=llms_content,
-            file_name="llms.txt",
-            mime="text/plain"
-        )
-
-    # --------------------------------------
-    # 2. ai-catalog.json
-    # --------------------------------------
-    elif tipo == "2. ai-catalog.json":
-        st.subheader("Generador de `ai-catalog.json`")
-        st.info("Debe ubicarse en: `/.well-known/ai-catalog.json` o en `/ai-catalog.json`")
-
-        c1, c2 = st.columns(2)
-        with c1:
-            cat_name = st.text_input("Nombre del Catálogo", "Enterprise Agent Tools")
-            cat_url = st.text_input("URL Base de la API", "https://api.tusitio.com")
-            privacy = st.text_input("URL Política de Privacidad", "https://tusitio.com/privacy")
-        with c2:
-            openapi_url = st.text_input("URL Especificación OpenAPI (Swagger)", "https://api.tusitio.com/openapi.json")
-            mcp_endpoint = st.text_input("Endpoint del Servidor MCP (si aplica)", "https://mcp.tusitio.com/sse")
-
-        catalog_data = {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "schema_version": "1.0.0",
-            "provider": {
-                "name": cat_name,
-                "base_url": cat_url,
-                "privacy_policy": privacy
-            },
-            "protocols": {
-                "webmcp": {
-                    "enabled": True,
-                    "endpoint": mcp_endpoint
-                },
-                "openapi": {
-                    "enabled": True if openapi_url else False,
-                    "spec_url": openapi_url
-                }
-            },
-            "rate_limits": {
-                "requests_per_minute": 60,
-                "requires_api_key": False
-            }
-        }
-        json_catalog = json.dumps(catalog_data, indent=2, ensure_ascii=False)
-        st.code(json_catalog, language="json")
-        st.download_button(
-            label="Descargar ai-catalog.json",
-            data=json_catalog,
-            file_name="ai-catalog.json",
-            mime="application/json"
-        )
-
-    # --------------------------------------
-    # 3. WebMCP Schema
-    # --------------------------------------
-    elif tipo == "3. Esquema WebMCP (JSON-LD)":
-        st.subheader("Generador de Esquema WebMCP (JSON-LD para el HTML)")
-        st.info("Pega este fragmento dentro del bloque `<head>` de tu página web.")
-
-        tool_name = st.text_input("Nombre de la Acción / Tool", "buscar_disponibilidad")
-        tool_desc = st.text_input("Descripción de lo que hace", "Verifica la disponibilidad y precio del producto.")
-        endpoint = st.text_input("Endpoint HTTP que procesa la acción", "https://api.tusitio.com/v1/tools/check")
-        param_name = st.text_input("Nombre del parámetro principal", "productId")
-        param_desc = st.text_input("Descripción del parámetro", "Identificador único (SKU) del producto")
-
-        webmcp_schema = {
-            "@context": [
-                "https://schema.org",
-                {"@vocab": "https://modelcontextprotocol.io/spec/v1#"}
-            ],
-            "@type": "WebMCPTool",
-            "name": tool_name,
-            "description": tool_desc,
-            "potentialAction": {
-                "@type": "ConsumeAction",
-                "target": {
-                    "@type": "EntryPoint",
-                    "urlTemplate": endpoint,
-                    "httpMethod": "POST",
-                    "encodingType": "application/json"
-                }
-            },
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    param_name: {
-                        "type": "string",
-                        "description": param_desc
-                    }
-                },
-                "required": [param_name]
-            }
-        }
-
-        html_snippet = f'<script type="application/ld+json">\n{json.dumps(webmcp_schema, indent=2, ensure_ascii=False)}\n</script>'
-        st.code(html_snippet, language="html")
-        st.download_button(
-            label="Descargar Snippet HTML",
-            data=html_snippet,
-            file_name="webmcp-schema.html",
-            mime="text/html"
-        )
-
-# ==========================================
-# TAB 2: VALIDADOR
-# ==========================================
-with tabs[1]:
-    st.header("Validador de Sitio Web")
-    target_url = st.text_input("Introduce la URL base de tu sitio web a evaluar:", "https://example.com")
+def scan_website(base_url):
+    """Escanea el sitio web y extrae información semántica, enlaces y formularios."""
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; AIAgentScanner/2.0; +https://google.com)"}
     
-    if st.button("Ejecutar Validación Completa", type="primary"):
-        if not target_url.startswith("http://") and not target_url.startswith("https://"):
-            st.error("Ingresa una URL válida que comience con http:// o https://")
-        else:
-            base = target_url.rstrip("/")
-            headers = {"User-Agent": "AIAgentValidator/1.0 (+https://google.com/searchconsole)"}
+    # 1. Petición a la Home
+    resp = requests.get(base_url, headers=headers, timeout=10)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+    
+    # 2. Extracción de Título y Descripción
+    title = soup.title.string.strip() if soup.title and soup.title.string else urlparse(base_url).netloc
+    
+    meta_desc = soup.find("meta", attrs={"name": "description"}) or soup.find("meta", attrs={"property": "og:description"})
+    description = meta_desc["content"].strip() if meta_desc and "content" in meta_desc.attrs else "Sitio web y plataforma digital oficial."
+    
+    # 3. Extracción de Enlaces de Navegación (para llms.txt)
+    links_dict = {}
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        link_text = a.get_text(strip=True)
+        if not link_text or len(link_text) < 3 or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+            continue
+            
+        full_url = urljoin(base_url, href)
+        # Solo enlaces internos
+        if urlparse(full_url).netloc == urlparse(base_url).netloc:
+            # Filtrar páginas irrelevantes repetidas
+            if full_url not in links_dict and full_url != base_url and full_url != f"{base_url}/":
+                links_dict[full_url] = link_text
 
-            # --------------------------------------
-            # 1. Validar llms.txt
-            # --------------------------------------
-            st.markdown("### 1. Archivo `llms.txt`")
-            llms_url = f"{base}/llms.txt"
-            try:
-                r_llms = requests.get(llms_url, headers=headers, timeout=6)
-                if r_llms.status_code == 200:
-                    text = r_llms.text.strip()
-                    if text.startswith("#") and "\n>" in text:
-                        st.success(f"✅ `llms.txt` localizado en `{llms_url}` y cumple con la especificación H1 + Blockquote.")
-                    else:
-                        st.warning(f"⚠️ `llms.txt` responde 200 OK, pero su contenido no parece Markdown estándar.")
-                elif r_llms.status_code == 404:
-                    st.error(f"❌ No encontrado: `{llms_url}` (HTTP 404).")
-                else:
-                    st.warning(f"⚠️ Respuesta inusual: `{llms_url}` retornó HTTP {r_llms.status_code}.")
-            except Exception as e:
-                st.error(f"❌ Error de red al solicitar `llms.txt`: {e}")
+    # Priorizar enlaces clave (docs, api, blog, contacto, productos)
+    priority_keywords = ["doc", "api", "servicio", "producto", "blog", "precio", "contacto", "nosotros", "about", "terms"]
+    categorized_links = []
+    
+    for url, text in list(links_dict.items())[:30]:  # Limitar a top 30
+        is_priority = any(k in url.lower() or k in text.lower() for k in priority_keywords)
+        categorized_links.append({"title": text, "url": url, "priority": is_priority})
+        
+    categorized_links = sorted(categorized_links, key=lambda x: x["priority"], reverse=True)[:10]
 
-            # --------------------------------------
-            # 2. Validar ai-catalog.json
-            # --------------------------------------
-            st.markdown("### 2. Archivo `ai-catalog.json`")
-            paths = ["/.well-known/ai-catalog.json", "/ai-catalog.json"]
-            catalog_ok = False
-
-            for p in paths:
-                cat_url = f"{base}{p}"
-                try:
-                    r_cat = requests.get(cat_url, headers=headers, timeout=6)
-                    if r_cat.status_code == 200:
-                        cors_header = r_cat.headers.get("Access-Control-Allow-Origin")
-                        data = r_cat.json()
-                        st.success(f"✅ `ai-catalog.json` detectado en `{cat_url}`.")
-                        
-                        if cors_header == "*" or cors_header:
-                            st.caption(f"ℹ️ CORS configurado correctamente (`Access-Control-Allow-Origin: {cors_header}`).")
-                        else:
-                            st.warning("⚠️ El archivo no envía encabezados CORS permisivos (`Access-Control-Allow-Origin: *`). Agentes en navegadores podrían ser bloqueados.")
-                        catalog_ok = True
-                        break
-                except json.JSONDecodeError:
-                    st.error(f"❌ Archivo en `{cat_url}` responde 200 pero NO es un JSON válido.")
-                except Exception:
-                    continue
-
-            if not catalog_ok:
-                st.error("❌ No se encontró `ai-catalog.json` ni en `/.well-known/` ni en la raíz.")
-
-            # --------------------------------------
-            # 3. Validar Esquema WebMCP en el HTML
-            # --------------------------------------
-            st.markdown("### 3. Esquema WebMCP en HTML")
-            try:
-                r_home = requests.get(base, headers=headers, timeout=6)
-                soup = BeautifulSoup(r_home.text, "html.parser")
-                scripts = soup.find_all("script", type="application/ld+json")
+    # 4. Detección de Formularios / Búsquedas para WebMCP
+    detected_tools = []
+    forms = soup.find_all("form")
+    for idx, form in enumerate(forms):
+        action = form.get("action", "")
+        method = form.get("method", "GET").upper()
+        inputs = form.find_all(["input", "select"])
+        
+        form_endpoint = urljoin(base_url, action) if action else base_url
+        params = {}
+        
+        for inp in inputs:
+            name = inp.get("name")
+            inp_type = inp.get("type", "text")
+            if name and inp_type not in ["hidden", "submit", "button"]:
+                params[name] = {
+                    "type": "string",
+                    "description": f"Parámetro {name} (campo {inp_type})"
+                }
+        
+        if params:
+            tool_name = f"accion_formulario_{idx+1}"
+            if any("search" in k.lower() or "q" == k.lower() or "query" in k.lower() for k in params):
+                tool_name = "buscar_en_sitio"
                 
-                webmcp_found = False
-                for script in scripts:
-                    if script.string and ("WebMCPTool" in script.string or "modelcontextprotocol.io" in script.string):
-                        webmcp_found = True
-                        st.success("✅ Metadatos WebMCP (JSON-LD) detectados en el HTML de la página de inicio.")
-                        st.json(json.loads(script.string))
-                        break
+            detected_tools.append({
+                "name": tool_name,
+                "description": f"Ejecuta una consulta en {form_endpoint}",
+                "endpoint": form_endpoint,
+                "method": method,
+                "parameters": params
+            })
+
+    # Si no detectó formularios, crear una búsqueda genérica WebMCP por defecto
+    if not detected_tools:
+        detected_tools.append({
+            "name": "buscar_en_sitio",
+            "description": "Herramienta por defecto para buscar contenidos o productos en el sitio.",
+            "endpoint": urljoin(base_url, "/search"),
+            "method": "GET",
+            "parameters": {
+                "query": {"type": "string", "description": "Término de búsqueda o palabra clave"}
+            }
+        })
+
+    # 5. Detección tentativa de OpenAPI
+    openapi_detected = None
+    for path in ["/openapi.json", "/swagger.json", "/api-docs"]:
+        try:
+            test_url = urljoin(base_url, path)
+            r_test = requests.head(test_url, headers=headers, timeout=3)
+            if r_test.status_code == 200:
+                openapi_detected = test_url
+                break
+        except Exception:
+            pass
+
+    return {
+        "title": title,
+        "description": description,
+        "base_url": base_url,
+        "links": categorized_links,
+        "tools": detected_tools,
+        "openapi": openapi_detected
+    }
+
+# ==========================================
+# GENERADORES DE ARCHIVOS
+# ==========================================
+
+def generate_llms_txt(data):
+    lines = [f"# {data['title']}", f"> {data['description']}\n", "## Documentación y Enlaces Clave"]
+    for l in data["links"]:
+        lines.append(f"- [{l['title']}]({l['url']}): Enlace indexado por la web agéntica.")
+    lines.append("\n## Gobernanza y Reglas de IA\n- [Términos de Servicio](/tos): Acceso para agentes automatizados y bots de búsqueda.")
+    return "\n".join(lines)
+
+def generate_ai_catalog(data):
+    tools_formatted = []
+    for t in data["tools"]:
+        tools_formatted.append({
+            "name": t["name"],
+            "description": t["description"],
+            "execution": {
+                "type": "http",
+                "method": t["method"],
+                "endpoint": t["endpoint"]
+            },
+            "parameters": {
+                "type": "object",
+                "properties": t["parameters"],
+                "required": list(t["parameters"].keys())
+            }
+        })
+
+    catalog = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "schema_version": "1.0.0",
+        "site": {
+            "name": data["title"],
+            "base_url": data["base_url"],
+            "description": data["description"]
+        },
+        "capabilities": {
+            "webmcp_version": "2024-11-05",
+            "tools": tools_formatted,
+            "openapi_spec": data["openapi"]
+        }
+    }
+    return json.dumps(catalog, indent=2, ensure_ascii=False)
+
+def generate_webmcp_snippet(data):
+    tool = data["tools"][0]
+    schema = {
+        "@context": [
+            "https://schema.org",
+            {"@vocab": "https://modelcontextprotocol.io/spec/v1#"}
+        ],
+        "@type": "WebMCPTool",
+        "name": tool["name"],
+        "description": tool["description"],
+        "potentialAction": {
+            "@type": "ConsumeAction",
+            "target": {
+                "@type": "EntryPoint",
+                "urlTemplate": tool["endpoint"],
+                "httpMethod": tool["method"]
+            }
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": tool["parameters"],
+            "required": list(tool["parameters"].keys())
+        }
+    }
+    return f'<!-- Pega este código dentro de la etiqueta <head> de tu página web -->\n<script type="application/ld+json">\n{json.dumps(schema, indent=2, ensure_ascii=False)}\n</script>'
+
+def create_zip_package(llms_txt, ai_catalog, webmcp_html):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        zip_file.writestr("llms.txt", llms_txt)
+        zip_file.writestr("ai-catalog.json", ai_catalog)
+        zip_file.writestr("webmcp-schema.html", webmcp_html)
+    return buf.getvalue()
+
+
+# ==========================================
+# INTERFAZ STREAMLIT
+# ==========================================
+
+st.title("⚡ Auto-Generador de Archivos para Agentes de IA")
+st.markdown("Ingresa la URL de tu sitio web. El sistema lo escaneará, extraerá su estructura y creará automáticamente los archivos **llms.txt**, **ai-catalog.json** y el esquema **WebMCP**.")
+
+url_input = st.text_input("Ingresa la URL completa de tu sitio web:", "https://")
+
+if st.button("🚀 Escanear Sitio y Generar Todo", type="primary"):
+    if not url_input.startswith("http://") and not url_input.startswith("https://"):
+        st.error("Por favor ingresa una URL válida (ejemplo: https://tu-dominio.com)")
+    else:
+        url_input = url_input.rstrip("/")
+        with st.status("Analizando sitio web...", expanded=True) as status:
+            try:
+                st.write("🌐 Conectando y descargando estructura HTML...")
+                data = scan_website(url_input)
                 
-                if not webmcp_found:
-                    st.warning("⚠️ No se detectó ninguna definición de herramientas WebMCP en el `<head>` del sitio.")
+                st.write(f"📝 Extrayendo metadatos: **{data['title']}**")
+                st.write(f"🔗 Mapeados {len(data['links'])} enlaces de navegación relevantes.")
+                st.write(f"🛠️ Detectadas {len(data['tools'])} herramientas/acciones para WebMCP.")
+                
+                # Generar archivos
+                llms_txt = generate_llms_txt(data)
+                ai_catalog = generate_ai_catalog(data)
+                webmcp_html = generate_webmcp_snippet(data)
+                zip_data = create_zip_package(llms_txt, ai_catalog, webmcp_html)
+                
+                status.update(label="¡Escaneo y generación completados con éxito!", state="complete", expanded=False)
+                
+                # Botón de descarga del paquete completo
+                st.success("🎉 Todos los archivos han sido generados con base en el análisis de tu web.")
+                st.download_button(
+                    label="📦 Descargar Todos los Archivos (.ZIP)",
+                    data=zip_data,
+                    file_name="ai-agent-files.zip",
+                    mime="application/zip",
+                    type="primary"
+                )
+                
+                # Vista previa con tabs
+                st.markdown("### Vista Previa de los Archivos")
+                prev_tab1, prev_tab2, prev_tab3 = st.tabs(["📄 llms.txt", "⚙️ ai-catalog.json", "🏷️ WebMCP (HTML)"])
+                
+                with prev_tab1:
+                    st.caption("Ubicación recomendada: `https://tusitio.com/llms.txt`")
+                    st.code(llms_txt, language="markdown")
+                    st.download_button("Descargar solo llms.txt", llms_txt, "llms.txt", "text/plain")
+                    
+                with prev_tab2:
+                    st.caption("Ubicación recomendada: `https://tusitio.com/.well-known/ai-catalog.json` o `/ai-catalog.json`")
+                    st.code(ai_catalog, language="json")
+                    st.download_button("Descargar solo ai-catalog.json", ai_catalog, "ai-catalog.json", "application/json")
+                    
+                with prev_tab3:
+                    st.caption("Ubicación: Pegar dentro de la etiqueta `<head>` en tu HTML principal.")
+                    st.code(webmcp_html, language="html")
+                    st.download_button("Descargar solo WebMCP snippet", webmcp_html, "webmcp-schema.html", "text/html")
+
             except Exception as e:
-                st.error(f"❌ Error al inspeccionar el código HTML del sitio: {e}")
+                status.update(label="Error durante el escaneo", state="error")
+                st.error(f"No fue posible analizar la URL especificada: {str(e)}")
